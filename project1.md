@@ -1,8 +1,6 @@
-**Understood! Let's tailor the architecture to accommodate separate folders for each subscription, with one being production (prod) and the other development (dev). We'll adjust the Terraform code and folder structure accordingly, ensuring best practices are followed.**
-
 ---
 
-## **Updated Azure Infrastructure Design for Separate Subscriptions**
+## **Azure Infrastructure Design for Separate Subscriptions**
 
 ### **1. Overview**
 

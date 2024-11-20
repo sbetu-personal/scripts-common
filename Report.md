@@ -2,8 +2,8 @@
 
 ### **Report: Analysis and Mitigation Plan for OS Families 2, 3, and 4 Retirement**
 
-**Prepared by:** [Your Name]  
-**Date:** [Insert Date]  
+**Prepared by:** 
+**Date:** 
 
 #### **Background**
 Microsoft has announced the retirement of OS Families 2, 3, and 4 in Cloud Services (Classic and Extended Support). Resources relying on these OS families need to be identified and migrated or updated to ensure continuity and security.

@@ -1,5 +1,3 @@
----
-
 ## **Azure Infrastructure Design for Separate Subscriptions**
 
 ### **1. Overview**

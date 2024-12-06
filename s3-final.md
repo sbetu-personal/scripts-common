@@ -28,4 +28,14 @@ feat: enforce mandatory S3 server-side encryption with stricter variable typing 
 - Convert `server_side_encryption_configuration` variable from `any` to a strongly typed object.
 - Add validation to ensure a valid encryption rule is always present.
 - Remove the possibility of deploying unencrypted S3 buckets.
+
+
+chore: simplify encryption rule and enforce SSE configuration
+
+- Changed encryption configuration from a list of rules to a single rule block, removing unnecessary dynamic blocks
+- Strongly typed the server_side_encryption_configuration variable for stricter validation
+- Validated allowed values for sse_algorithm (AES256, aws:kms, aws:kms:dsse)
+- Documented changes in CHANGELOG.md following Keep a Changelog guidelines
+- Deferred updating README.md, pending tf-docs usage per peer suggestion
+
 ```

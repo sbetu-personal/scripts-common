@@ -386,3 +386,51 @@ output "websocket_api_id" {
 3. Use this module in your root configuration and test accordingly.
 
 This code should now pass `terraform validate` and not produce unexpected attribute errors.
+
+
+Terraform’s `variable` blocks should not contain function calls like `jsonencode()` in their default values. The `default` value must be a static literal. If you need a JSON string, provide it directly as a string.
+
+Below is a corrected snippet for the `access_log_format` variable, providing a static JSON string rather than using `jsonencode()`:
+
+**`variables.tf` (updated)**
+```hcl
+variable "access_log_format" {
+  description = "Format for the access logs"
+  type        = string
+  default = <<-EOT
+{
+  "requestId": "$context.requestId",
+  "ip": "$context.identity.sourceIp",
+  "requestTime": "$context.requestTime",
+  "httpMethod": "$context.httpMethod",
+  "resourcePath": "$context.resourcePath",
+  "status": "$context.status",
+  "protocol": "$context.protocol"
+}
+EOT
+}
+```
+
+**Explanation:**
+- We use a [heredoc string](https://www.terraform.io/language/syntax/configuration#heredoc-strings) to define a multiline JSON string.
+- This string is assigned directly as the default value without calling any Terraform functions.
+
+**Usage in `main.tf`:**
+```hcl
+resource "aws_api_gateway_stage" "rest_stage" {
+  count         = local.is_rest ? 1 : 0
+  rest_api_id   = aws_api_gateway_rest_api.rest_api[0].id
+  stage_name    = var.stage_name
+  deployment_id = aws_api_gateway_deployment.rest_deployment[0].id
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.rest_logs.arn
+    format          = var.access_log_format
+  }
+
+  cache_cluster_enabled = var.enable_caching
+  cache_cluster_size    = var.cache_size
+}
+```
+
+With this change, `terraform validate` should no longer complain about function calls in the variable's default value. If you encounter any other errors, ensure all variables have static defaults and that no Terraform functions are used inside variable defaults.

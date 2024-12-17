@@ -1,95 +1,102 @@
-Certainly! Here's a straightforward and human-friendly email template you can use to notify the owners about the publicly accessible S3 bucket as per CBC Orca policy:
+Below is an enhanced Python script that:
+	1.	By default, lists all S3 buckets in the AWS account and retrieves object encryption status for each.
+	2.	If a bucket list file is provided (via --buckets <filename>), it only checks those buckets in the file.
 
----
+Features:
+	•	Uses argparse for command-line options.
+	•	If no buckets file is given, it retrieves and checks all buckets in the account.
+	•	If a buckets file is given, it reads the bucket names from that file (one per line).
+	•	Outputs results to CSV format, printing to stdout by default. You can redirect to a file if needed.
 
-**Subject:** Action Required: Publicly Accessible S3 Bucket Detected
+Requirements:
+	•	boto3 installed (pip install boto3)
+	•	AWS credentials configured
+	•	jq no longer needed since we’re using Python directly.
 
----
+Usage Examples:
+	•	Check all buckets in the account:
 
-**Hi [Recipient's Name],**
+python3 s3_encryption_report.py > all_buckets_report.csv
 
-I hope you're well.
 
-Our security team using **Orca Security** has found that an Amazon S3 bucket in the **DMZ Non-Prod** AWS account is **publicly accessible**. According to **CBC Orca policies**, this bucket should not be public and needs to be secured immediately to protect our data.
+	•	Check only buckets specified in my_buckets.txt:
 
-**What Needs to Be Done:**
+python3 s3_encryption_report.py --buckets my_buckets.txt > selected_buckets_report.csv
 
-1. **Make the Bucket Private:**
-   - **Block Public Access:** Adjust the bucket settings to block all public access.
-   - **Review Permissions:** Ensure that only authorized users and services can access the bucket by checking the bucket policies and ACLs.
 
-2. **Confirm the Changes:**
-   - Let us know once you've secured the bucket so we can verify everything is properly set.
 
-**Not the Right Person?**
+Script (s3_encryption_report.py):
 
-If you're not responsible for this bucket, please **forward this email** to the correct person or provide their contact information so they can address this issue.
+import boto3
+import csv
+import sys
+import argparse
 
-**Deadline:**
+def list_all_buckets(s3_client):
+    response = s3_client.list_buckets()
+    buckets = [b['Name'] for b in response.get('Buckets', [])]
+    return buckets
 
-Please address this by **[Insert Deadline, e.g., "End of Next Week"]** to comply with our security policies.
+def list_objects_in_bucket(s3_client, bucket_name):
+    # Lists all objects in the bucket. May need pagination if many objects.
+    objects = []
+    paginator = s3_client.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=bucket_name):
+        for obj in page.get('Contents', []):
+            objects.append(obj['Key'])
+    return objects
 
-If you have any questions or need help, feel free to reach out to me or the **Cloud Security Team** at [cloud-security@yourcompany.com](mailto:cloud-security@yourcompany.com).
+def check_bucket_encryption(s3_client, bucket_name, writer):
+    # List all objects and determine their encryption status
+    try:
+        objects = list_objects_in_bucket(s3_client, bucket_name)
+        # If no objects found, write a line indicating this (optional)
+        if not objects:
+            writer.writerow([bucket_name, "", "No objects in bucket"])
+            return
 
-Thanks for your prompt attention to this!
+        for key in objects:
+            head_response = s3_client.head_object(Bucket=bucket_name, Key=key)
+            encryption = head_response.get('ServerSideEncryption', 'None')
+            writer.writerow([bucket_name, key, encryption])
 
-Best,  
-[Your Name]  
-[Your Job Title]  
-[Your Contact Information]  
-[Your Company Name]
+    except s3_client.exceptions.NoSuchBucket:
+        # Bucket may not exist or might have been deleted
+        writer.writerow([bucket_name, "", "Bucket does not exist or is not accessible"])
+    except Exception as e:
+        # Catch all other exceptions for logging
+        writer.writerow([bucket_name, "", f"Error retrieving objects: {e}"])
 
----
+def main():
+    parser = argparse.ArgumentParser(description="Generate an S3 encryption report for one or more buckets.")
+    parser.add_argument("--buckets", help="Path to a text file containing a list of buckets to check (one per line). If not provided, all buckets will be checked.")
+    args = parser.parse_args()
 
-**Example:**
+    s3_client = boto3.client('s3')
 
----
+    if args.buckets:
+        # Read buckets from the provided file
+        with open(args.buckets, 'r') as f:
+            buckets = [line.strip() for line in f if line.strip()]
+    else:
+        # No buckets file provided, list all buckets in the account
+        buckets = list_all_buckets(s3_client)
 
-**Subject:** Action Required: Publicly Accessible S3 Bucket Detected
+    writer = csv.writer(sys.stdout, lineterminator='\n')
+    writer.writerow(["BucketName", "ObjectKey", "ServerSideEncryption"])
 
----
+    for bucket in buckets:
+        check_bucket_encryption(s3_client, bucket, writer)
 
-**Hi Jane,**
+if __name__ == "__main__":
+    main()
 
-I hope you're well.
+How This Works:
+	•	main() parses optional arguments.
+	•	If --buckets is provided, it reads bucket names from the file. Otherwise, it lists all buckets in the account.
+	•	For each bucket, it:
+	•	Lists all objects (using a paginator to handle large buckets).
+	•	Retrieves ServerSideEncryption for each object.
+	•	Writes the results to CSV (BucketName, ObjectKey, ServerSideEncryption).
 
-Our security team using **Orca Security** has found that an Amazon S3 bucket in the **DMZ Non-Prod** AWS account is **publicly accessible**. According to **CBC Orca policies**, this bucket should not be public and needs to be secured immediately to protect our data.
-
-**What Needs to Be Done:**
-
-1. **Make the Bucket Private:**
-   - **Block Public Access:** Adjust the bucket settings to block all public access.
-   - **Review Permissions:** Ensure that only authorized users and services can access the bucket by checking the bucket policies and ACLs.
-
-2. **Confirm the Changes:**
-   - Let us know once you've secured the bucket so we can verify everything is properly set.
-
-**Not the Right Person?**
-
-If you're not responsible for this bucket, please **forward this email** to the correct person or provide their contact information so they can address this issue.
-
-**Deadline:**
-
-Please address this by **next Friday** to comply with our security policies.
-
-If you have any questions or need help, feel free to reach out to me or the **Cloud Security Team** at [cloud-security@yourcompany.com](mailto:cloud-security@yourcompany.com).
-
-Thanks for your prompt attention to this!
-
-Best,  
-John Smith  
-Cloud Security Analyst  
-john.smith@yourcompany.com  
-Your Company Name
-
----
-
-**Tips for Customization:**
-
-1. **Personalize the Greeting:** Use the recipient’s name to make the email feel more personal.
-2. **Specify the Deadline:** Choose a realistic deadline based on your organization’s policies.
-3. **Add Bucket Details (Optional):** If possible, include the bucket name or other identifying information to help the recipient locate it quickly.
-4. **Provide Clear Contact Information:** Ensure recipients know how to reach you or the security team for support.
-5. **Keep It Brief:** The goal is to communicate the issue clearly without overwhelming the reader with too much information.
-
-Feel free to adjust the language and details to better fit your company’s culture and the specific situation.
+If you have a large number of buckets or objects, this script might take some time. For extremely large buckets, consider using S3 Inventory or other batch methods for scalability.

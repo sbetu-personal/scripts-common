@@ -1,27 +1,39 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-BUCKET_NAME="<bucket-name>"
+# Replace with your actual bucket name
+BUCKET_NAME="<your-bucket-name>"
 
-# List all object keys from the bucket
-aws s3api list-objects --bucket "$BUCKET_NAME" --query "Contents[].Key" --output text | \
+# If the bucket is not in your default region, uncomment and set the region:
+# REGION="us-west-2"
+# Add --region "$REGION" to the aws commands if needed.
+
+# List objects in the bucket and read their keys line by line
+aws s3api list-objects --bucket "$BUCKET_NAME" \
+    --query "Contents[].Key" \
+    --output text ${REGION:+--region "$REGION"} | \
 while IFS= read -r key; do
-  # Retrieve the ServerSideEncryption attribute of the object
-  encryption=$(aws s3api head-object \
+  echo "Checking object: $key"
+
+  # Get object metadata in JSON format
+  obj_metadata=$(aws s3api head-object \
     --bucket "$BUCKET_NAME" \
     --key "$key" \
-    --query "ServerSideEncryption" \
-    --output text 2>/dev/null)
+    --output json \
+    ${REGION:+--region "$REGION"} 2>/dev/null || true)
 
-  # Check the value of ServerSideEncryption
+  # If no metadata was returned, object might not exist or you lack permissions
+  if [ -z "$obj_metadata" ]; then
+    echo "Warning: Could not retrieve metadata for $key"
+    continue
+  fi
+
+  # Extract the ServerSideEncryption field from the JSON
+  encryption=$(echo "$obj_metadata" | jq -r '.ServerSideEncryption // "None"')
+
   if [ "$encryption" = "None" ]; then
-    # No server-side encryption is applied
     echo "Unencrypted object: $key"
-  elif [ "$encryption" = "AES256" ] || [ "$encryption" = "aws:kms" ]; then
-    # The object is encrypted with AES256 or KMS
-    echo "Encrypted object: $key with SSE: $encryption"
   else
-    # If no value is returned or something else unexpected occurs
-    # This could mean the object is unencrypted or inaccessible
-    echo "Object: $key - No SSE field returned. Possibly unencrypted."
+    echo "Encrypted object: $key with SSE: $encryption"
   fi
 done

@@ -1,40 +1,387 @@
-Below is a draft email you could send to your manager regarding the need for a Log Analytics workspace (LAWS) and Diagnostic settings on all 13 Azure SQL Managed Instances:
+I'll help you create a modular and dynamic Azure network infrastructure Terraform configuration. We'll structure it with reusable modules and follow best practices for enterprise-grade deployments.
 
----
+Here's the directory structure we'll use:
 
-**Subject:** Request to Enable Diagnostics and Create Log Analytics Workspace for Azure SQL MIs
+```
+modules/
+├── vnet/
+│   ├── main.tf
+│   ├── variables.tf
+│   └── outputs.tf
+├── subnet/
+│   ├── main.tf
+│   ├── variables.tf
+│   └── outputs.tf
+├── nsg/
+│   ├── main.tf
+│   ├── variables.tf
+│   └── outputs.tf
+├── route-table/
+│   ├── main.tf
+│   ├── variables.tf
+│   └── outputs.tf
+└── vnet-peering/
+    ├── main.tf
+    ├── variables.tf
+    └── outputs.tf
+main.tf
+variables.tf
+outputs.tf
+terraform.tfvars.example
+```
 
-**Hi [Manager’s Name],**
+Let's create each module:
 
-I hope you’re doing well. I’d like to recommend setting up a **Log Analytics Workspace (LAWS)** and configuring **Diagnostic settings** on all 13 of our Azure SQL Managed Instances. This would allow us to:
+1. **Virtual Network Module (modules/vnet)**:
 
-1. **Centralize Security Logs and Audit Data**  
-   - Storing all audit logs, login attempts, and performance data in one place will greatly improve our ability to detect suspicious activity and ensure compliance.
+```hcl
+# modules/vnet/main.tf
+resource "azurerm_virtual_network" "vnet" {
+  name                = var.vnet_name
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  address_space       = var.address_space
+  tags                = merge(var.tags, { module = "vnet" })
+}
 
-2. **Identify Unused or Underutilized Instances**  
-   - With Diagnostic logs in one workspace, we can quickly pinpoint any Managed Instances that are no longer in use or have minimal activity, helping us optimize costs.
+# modules/vnet/variables.tf
+variable "vnet_name" {
+  description = "Name of the virtual network"
+  type        = string
+}
 
-**Current Situation**  
-- We can see basic metrics (e.g., CPU) in the Azure Portal by default, but these do not include the detailed security and diagnostic logs we need for a thorough analysis and audit trail.
-- Alternatively, we could log into each of the 13 servers individually and run T-SQL queries to check usage. However, that approach is cumbersome and doesn’t provide a centralized view, especially for security incident correlation or ongoing analytics.
+variable "resource_group_name" {
+  description = "Name of the resource group"
+  type        = string
+}
 
-**Proposed Solution**  
-1. **Create a dedicated Log Analytics Workspace** (or leverage an existing suitable one, if we have it).  
-2. **Enable Diagnostic settings** on each of the 13 Managed Instances, pointing all logs (SQLSecurityAuditEvents, ErrorLog, etc.) to the LAWS.  
-3. **Validate data ingestion** by ensuring logs are flowing into the workspace and confirm that we can run KQL queries to analyze security, usage patterns, and performance across all instances.
+variable "location" {
+  description = "Azure region location"
+  type        = string
+}
 
-**Benefits**  
-- **Better Security Posture**: Faster detection of unauthorized logins or anomalies.  
-- **Easier Compliance**: A unified log repository simplifies audits and reporting.  
-- **Operational Efficiency**: We can quickly identify which instances are underutilized or inactive and take appropriate action.
+variable "address_space" {
+  description = "List of virtual network address spaces"
+  type        = list(string)
+}
 
-Please let me know if you have any questions or concerns about this plan. I’m happy to provide more details on the setup process and the expected timeline.
+variable "tags" {
+  description = "Tags for resources"
+  type        = map(string)
+  default     = {}
+}
 
-Thank you for your consideration, and I look forward to hearing your thoughts.
+# modules/vnet/outputs.tf
+output "vnet_id" {
+  value = azurerm_virtual_network.vnet.id
+}
 
----
+output "vnet_name" {
+  value = azurerm_virtual_network.vnet.name
+}
+```
 
-Best regards,  
-**[Your Name]**  
-**[Your Title/Role]**  
-**[Date]**
+2. **Subnet Module (modules/subnet)**:
+
+```hcl
+# modules/subnet/main.tf
+resource "azurerm_subnet" "subnet" {
+  for_each             = var.subnets
+  name                 = each.key
+  resource_group_name  = var.resource_group_name
+  virtual_network_name = var.vnet_name
+  address_prefixes     = each.value.address_prefixes
+  service_endpoints    = lookup(each.value, "service_endpoints", [])
+
+  dynamic "delegation" {
+    for_each = lookup(each.value, "delegation", {}) != {} ? [1] : []
+    content {
+      name = delegation.value.name
+      service_delegation {
+        name    = delegation.value.service_name
+        actions = delegation.value.actions
+      }
+    }
+  }
+}
+
+# modules/subnet/variables.tf
+variable "subnets" {
+  description = "Map of subnets with their properties"
+  type = map(object({
+    address_prefixes = list(string)
+    service_endpoints = optional(list(string))
+    delegation = optional(object({
+      name          = string
+      service_name  = string
+      actions       = list(string)
+    }))
+  }))
+}
+
+variable "resource_group_name" {
+  description = "Name of the resource group"
+  type        = string
+}
+
+variable "vnet_name" {
+  description = "Name of the virtual network"
+  type        = string
+}
+
+# modules/subnet/outputs.tf
+output "subnet_ids" {
+  value = { for k, v in azurerm_subnet.subnet : k => v.id }
+}
+```
+
+3. **Network Security Group Module (modules/nsg)**:
+
+```hcl
+# modules/nsg/main.tf
+resource "azurerm_network_security_group" "nsg" {
+  name                = var.nsg_name
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = merge(var.tags, { module = "nsg" })
+
+  dynamic "security_rule" {
+    for_each = var.security_rules
+    content {
+      name                       = security_rule.value.name
+      priority                   = security_rule.value.priority
+      direction                  = security_rule.value.direction
+      access                     = security_rule.value.access
+      protocol                   = security_rule.value.protocol
+      source_port_range          = lookup(security_rule.value, "source_port_range", null)
+      destination_port_range     = lookup(security_rule.value, "destination_port_range", null)
+      source_address_prefix      = lookup(security_rule.value, "source_address_prefix", null)
+      destination_address_prefix = lookup(security_rule.value, "destination_address_prefix", null)
+    }
+  }
+}
+
+# modules/nsg/variables.tf
+variable "nsg_name" {
+  description = "Name of the network security group"
+  type        = string
+}
+
+variable "resource_group_name" {
+  description = "Name of the resource group"
+  type        = string
+}
+
+variable "location" {
+  description = "Azure region location"
+  type        = string
+}
+
+variable "security_rules" {
+  description = "List of security rules"
+  type = list(object({
+    name                       = string
+    priority                   = number
+    direction                  = string
+    access                     = string
+    protocol                   = string
+    source_port_range          = optional(string)
+    destination_port_range     = optional(string)
+    source_address_prefix      = optional(string)
+    destination_address_prefix = optional(string)
+  }))
+}
+
+variable "tags" {
+  description = "Tags for resources"
+  type        = map(string)
+  default     = {}
+}
+
+# modules/nsg/outputs.tf
+output "nsg_id" {
+  value = azurerm_network_security_group.nsg.id
+}
+```
+
+4. **Main Configuration (main.tf)**:
+
+```hcl
+provider "azurerm" {
+  features {}
+}
+
+module "vnet" {
+  source              = "./modules/vnet"
+  vnet_name           = var.vnet_name
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  address_space       = var.address_space
+  tags                = var.tags
+}
+
+module "subnet" {
+  source              = "./modules/subnet"
+  subnets             = var.subnets
+  resource_group_name = var.resource_group_name
+  vnet_name           = module.vnet.vnet_name
+}
+
+module "nsg" {
+  source              = "./modules/nsg"
+  nsg_name            = "${var.vnet_name}-default-nsg"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  security_rules      = var.nsg_rules
+  tags                = var.tags
+}
+```
+
+5. **Root Variables (variables.tf)**:
+
+```hcl
+variable "resource_group_name" {
+  description = "Name of the resource group"
+  type        = string
+}
+
+variable "location" {
+  description = "Azure region location"
+  type        = string
+}
+
+variable "vnet_name" {
+  description = "Name of the virtual network"
+  type        = string
+}
+
+variable "address_space" {
+  description = "List of virtual network address spaces"
+  type        = list(string)
+}
+
+variable "subnets" {
+  description = "Map of subnets with their properties"
+  type = map(object({
+    address_prefixes = list(string)
+    service_endpoints = optional(list(string))
+    delegation = optional(object({
+      name          = string
+      service_name  = string
+      actions       = list(string)
+    }))
+  }))
+}
+
+variable "nsg_rules" {
+  description = "List of NSG security rules"
+  type = list(object({
+    name                       = string
+    priority                   = number
+    direction                  = string
+    access                     = string
+    protocol                   = string
+    source_port_range          = optional(string)
+    destination_port_range     = optional(string)
+    source_address_prefix      = optional(string)
+    destination_address_prefix = optional(string)
+  }))
+  default = []
+}
+
+variable "tags" {
+  description = "Tags for all resources"
+  type        = map(string)
+  default     = {}
+}
+```
+
+6. **Example Usage (terraform.tfvars.example)**:
+
+```hcl
+resource_group_name = "prod-network-rg"
+location            = "eastus"
+vnet_name           = "prod-vnet"
+address_space       = ["10.0.0.0/16"]
+
+subnets = {
+  "web" = {
+    address_prefixes = ["10.0.1.0/24"]
+    service_endpoints = ["Microsoft.Storage"]
+  },
+  "db" = {
+    address_prefixes = ["10.0.2.0/24"]
+    delegation = {
+      name          = "db-delegation"
+      service_name  = "Microsoft.DBforPostgreSQL/flexibleServers"
+      actions       = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+    }
+  }
+}
+
+nsg_rules = [
+  {
+    name                       = "AllowHTTP"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+]
+
+tags = {
+  Environment = "Production"
+  Team        = "Network"
+}
+```
+
+Key Features:
+
+1. **Modular Design**: Each Azure resource is separated into its own module for maximum reusability
+2. **Dynamic Configuration**:
+   - Flexible subnet configuration with optional delegation and service endpoints
+   - Customizable NSG rules with optional parameters
+   - Tagging support across all resources
+3. **Type Constraints**: Strict variable typing for better validation
+4. **Scalability**: Easy to add new modules or extend existing ones
+5. **Best Practices**:
+   - Secure default configurations
+   - Clear separation of concerns
+   - Comprehensive output variables
+   - Input validation through variable types
+
+To use this configuration:
+
+1. Create a `terraform.tfvars` file based on the example
+2. Initialize Terraform:
+   ```bash
+   terraform init
+   ```
+3. Review the plan:
+   ```bash
+   terraform plan
+   ```
+4. Apply the configuration:
+   ```bash
+   terraform apply
+   ```
+
+You can extend this further by:
+
+1. Adding Azure Firewall module
+2. Implementing Virtual Network Peering
+3. Adding Private DNS Zones
+4. Implementing Network Watcher
+5. Adding DDoS Protection Plan
+
+Remember to:
+
+1. Use remote state storage (Azure Storage Account)
+2. Implement CI/CD pipeline for deployments
+3. Add testing using Terratest
+4. Implement policy compliance checks
+5. Add monitoring and diagnostics configurations

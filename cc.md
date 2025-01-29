@@ -1,38 +1,20 @@
-### **JIRA Ticket: Configure Log Analytics for Azure SQL Managed Instances**  
+**Subject:** Request to Update Orca Policies for AWS Lambda Encryption  
 
-**Summary:**  
-Set up a dedicated Log Analytics Workspace (LAWS) in the Azure sandbox subscription and configure diagnostic settings for all 13 Azure SQL Managed Instances across different subscriptions to send logs for monitoring and auditing.  
+Hi [Security Team],  
 
----
+As discussed with Mark (Architect), we have reviewed the recent **CBC alerts in Orca** related to **"AWS Lambda function must be encrypted at rest."**  
 
-### **Description:**  
-To improve visibility into the usage of our Azure SQL Managed Instances, we need to track login activities and database utilization. Currently, we have 13 SQL Managed Instances spread across different subscriptions, and we are unsure if all of them are actively used.  
+Currently, AWS Lambda **encrypts function artifacts and environment variables at rest by default** using an AWS-managed KMS key (`aws/lambda`). While it is **recommended** to use a **customer-managed KMS key (CMK)**, it is **not mandatory** as long as encryption is in place.  
 
-As part of this initiative, I will:  
+Since our compliance policy does not **strictly require** a customer-managed key, we request an update to the **Orca policy** to reflect this:  
 
-- Create a **dedicated Log Analytics Workspace (LAWS)** in our Azure sandbox subscription.  
-- Configure **diagnostic settings** for each of the 13 SQL Managed Instances to send logs to this centralized LAWS.  
-- **Analyze login patterns and database activity** to determine which instances are actively used.  
-- Based on findings, recommend **cleanup actions** for unused or rarely used databases.  
-- Once the analysis is complete, either **clean up the LAWS** or repurpose it for monitoring other Azure resources.  
+- ✅ Allow AWS-managed KMS encryption (`aws/lambda`) to be considered **compliant**.  
+- ✅ Retain alerts **only** for Lambda functions that have **no encryption at all** (if applicable).  
+- ✅ Continue flagging cases where **CMK is required but missing** for specific high-security workloads (if applicable).  
 
----
+This will help reduce unnecessary alerts while still ensuring that our security standards are met.  
 
-### **Acceptance Criteria:**  
+Let us know if you need further details or if there’s any discussion required before making this change.  
 
-✅ A new **Log Analytics Workspace (LAWS)** is successfully created in the sandbox subscription.  
-✅ Diagnostic settings are configured on **all 13 SQL Managed Instances** to forward logs to this LAWS.  
-✅ Login and usage data is successfully **ingested and available for analysis** in LAWS.  
-✅ A report is generated that outlines **active vs. inactive databases** based on login and usage patterns.  
-✅ A cleanup plan is proposed for **unused or underutilized** SQL instances.  
-✅ A decision is made on whether to **delete or retain** the LAWS after analysis.  
-
----
-
-**Priority:** Medium  
-**Labels:** Azure, Log Analytics, SQL MI, Monitoring  
-**Assignee:** [Your Name]  
-**Reporter:** [Your Name]  
-**Due Date:** [Set Based on Your Timeline]  
-
-Let me know if you need any changes! 🚀
+Thanks,  
+[Your Name]

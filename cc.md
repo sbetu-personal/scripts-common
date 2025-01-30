@@ -1,6 +1,6 @@
 Change Control Document
 
-Title: Setup of Log Analytics Workspace for Azure SQL Managed Instance (MI) Monitoring
+Title: Setup of Log Analytics Workspace (LAWS) for Azure SQL Managed Instance (MI) Monitoring
 
 1. Change Request Details
 
@@ -28,12 +28,14 @@ Currently, we have 13 Azure SQL Managed Instances across different subscriptions
 	•	Centralize logs into a dedicated Log Analytics Workspace (LAWS) for efficient monitoring.
 
 2. Change Description
-	1.	Create a new Log Analytics Workspace (LAWS) in the Azure sandbox subscription.
-	2.	Configure diagnostic settings for all 13 Azure SQL Managed Instances to send logs to this LAWS.
-	3.	Validate log ingestion by checking for successful data flow.
-	4.	Analyze usage patterns (database access, login frequency).
-	5.	Based on findings, recommend cleanup actions for unused databases.
-	6.	Decide the fate of LAWS after analysis – either clean it up or repurpose it for monitoring other Azure resources.
+
+This change involves:
+	1.	Creating a new Log Analytics Workspace (LAWS) in the Azure sandbox subscription.
+	2.	Configuring diagnostic settings for all 13 Azure SQL Managed Instances to send logs to this LAWS.
+	3.	Validating log ingestion by checking for successful data flow.
+	4.	Analyzing usage patterns (database access, login frequency).
+	5.	Based on findings, recommending cleanup actions for unused databases.
+	6.	Deciding the fate of LAWS after analysis – either clean it up or repurpose it for monitoring other Azure resources.
 
 3. Impact Analysis
 
@@ -56,15 +58,71 @@ Pre-Implementation Steps:
 ✅ Verify subscriptions and permissions for cross-subscription logging.
 ✅ Ensure required RBAC roles for setting up LAWS.
 
-Implementation Steps:
+Implementation Steps (With Details)
 
-1️⃣ Create Log Analytics Workspace in Azure sandbox subscription.
-2️⃣ Apply diagnostic settings on all 13 SQL Managed Instances.
-3️⃣ Verify logs are being ingested successfully.
-4️⃣ Analyze database login activity & usage trends.
-5️⃣ Generate reports on active vs. inactive databases.
-6️⃣ Based on findings, recommend cleanup actions.
-7️⃣ Decide whether to retain or delete LAWS.
+Step 1: Log in to Azure
+	1.	Open a browser and navigate to Azure Portal.
+	2.	Log in using your Azure credentials.
+	3.	Ensure you have the right permissions to create a Log Analytics Workspace and modify diagnostic settings.
+
+Step 2: Create a Log Analytics Workspace (LAWS)
+	1.	In the Azure Portal, search for Log Analytics workspaces in the search bar.
+	2.	Click Create.
+	3.	Enter the following details:
+	•	Subscription: Select the Azure sandbox subscription.
+	•	Resource Group: Choose an existing group or create a new one.
+	•	Name: Enter a unique name, e.g., SQL-MI-Monitoring-LAWS.
+	•	Region: Choose a region close to your resources.
+	•	Pricing Tier: Keep the default Pay-as-you-go option.
+	4.	Click Review + Create, then Create.
+	5.	Wait for deployment to complete and note down the Workspace ID and Key.
+
+Step 3: Configure Diagnostic Settings for SQL Managed Instances
+
+For each of the 13 Azure SQL Managed Instances, perform the following:
+	1.	In Azure Portal, navigate to Azure SQL Managed Instance.
+	2.	Select the SQL Managed Instance to configure.
+	3.	On the left menu, click Diagnostics settings.
+	4.	Click + Add diagnostic setting.
+	5.	Name the setting, e.g., SQL-MI-Logs-to-LAWS.
+	6.	Under Categories, select:
+	•	SQLSecurityAuditEvents (to track login activity)
+	•	Errors
+	•	ExecutionStatistics
+	•	BlockedProcesses
+	7.	Under Destination Details, choose Send to Log Analytics workspace.
+	8.	Select the Log Analytics Workspace (SQL-MI-Monitoring-LAWS) created earlier.
+	9.	Click Save.
+	10.	Repeat for all 13 SQL Managed Instances.
+
+Step 4: Validate Log Ingestion
+	1.	Go to Log Analytics Workspace (SQL-MI-Monitoring-LAWS).
+	2.	Open Logs and run the following query to check for ingested logs:
+
+AzureDiagnostics
+| where TimeGenerated > ago(1h)
+| order by TimeGenerated desc
+
+
+	3.	Verify that login attempts and SQL usage logs are appearing.
+	4.	If logs are missing, revisit diagnostic settings and troubleshoot.
+
+Step 5: Analyze Usage and Identify Cleanup Candidates
+	1.	Use the following query to check login frequency:
+
+AzureDiagnostics
+| where Category == "SQLSecurityAuditEvents"
+| summarize LoginCount=count() by UserName, ManagedInstanceName
+| order by LoginCount desc
+
+
+	2.	Identify instances with low or no activity.
+	3.	Generate a report listing active vs. inactive databases.
+	4.	Recommend cleanup actions based on findings.
+
+Step 6: Decision on LAWS Cleanup
+	1.	If the workspace is no longer needed after the audit, delete it to save costs.
+	2.	If useful for long-term monitoring, repurpose it for Azure resource usage tracking.
 
 5. Rollback Plan
 	•	If logs fail to be ingested, revert diagnostic settings to previous state.

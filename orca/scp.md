@@ -24,3 +24,29 @@ Thank you for considering this, and please let me know if you have any concerns 
 **Best regards,**  
 _\<Your Name\>_  
 _\<Your Title / Team\>_
+
+
+Below is a **sample email** you can send to your architect, mentioning that you spoke to AWS Support about why the policy is still recommended, and requesting an SCP for SNS/SQS. Feel free to adjust any specifics (names, teams, etc.) to fit your environment.
+
+---
+
+**Subject:** SCP for Enforcing HTTPS in SNS & SQS – AWS Support Confirmation
+
+**Hello \<Architect Name\>,**
+
+I hope you’re doing well. I recently **raised a case with AWS Support** regarding encryption in transit for SNS and SQS. Even though these services leverage TLS (HTTPS) by default, AWS recommended we **explicitly enforce** secure transport via a condition (`aws:SecureTransport = true`). Their main points were:
+
+- It provides **defense-in-depth** and ensures absolutely no unencrypted HTTP requests (even in rare edge cases).  
+- It satisfies **compliance** frameworks that require explicit enforcement of encryption in transit.  
+- It’s **best practice** to have an SCP at the AWS Organizations level that automatically denies any attempt to create or modify SNS/SQS if unencrypted connections are used.
+
+To **streamline this** (rather than having every application team manually apply the policy), I propose we **create a single SCP** that covers all SNS/SQS resources across our AWS Organization or relevant OU. This will remove the burden from individual teams and ensure consistent, org-wide enforcement.
+
+**Would you be open** to setting up an SCP for this? We can **test** it first in a non-production OU/account to verify no legacy application is using HTTP by mistake. I can provide the sample JSON for the SCP that denies non-HTTPS traffic.
+
+Please let me know if you have any questions or prefer a different approach. I’m happy to discuss further or hop on a quick call.
+
+  
+**Best regards,**  
+_\<Your Name\>_  
+_\<Your Title / Team\>_

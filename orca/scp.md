@@ -50,3 +50,23 @@ Please let me know if you have any questions or prefer a different approach. Iâ€
 **Best regards,**  
 _\<Your Name\>_  
 _\<Your Title / Team\>_
+
+
+Below is a concise **email** that references your **AWS support request**, **CBC requirement**, and your **ask** for an SCP to deny `aws:SecureTransport = false`. Since they already know how to write the policy, you can keep it high-level:
+
+---
+
+**Subject:** Request to Implement CBC Deny Policy (aws:SecureTransport)
+
+**Hello \<Architect / Team\>,**
+
+I hope youâ€™re doing well. Following our **AWS support request** and in line with our **CBC requirement**, we need to **deny any unencrypted traffic** for SNS and SQS using `aws:SecureTransport = false`. Although AWS defaults to TLS for these services, implementing an SCP will ensure strict compliance and prevent any inadvertent HTTP usage.
+
+Could we please **add an SCP** at the organizational level that denies requests where `aws:SecureTransport = false`? This will fully align us with our CBC mandate and provide defense-in-depth for our security posture.
+
+Let me know if you have any questions or need additional info. Thank you!
+
+  
+**Best Regards,**  
+\<Your Name\>  
+\<Your Title / Team\>

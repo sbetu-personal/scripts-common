@@ -70,3 +70,57 @@ Let me know if you have any questions or need additional info. Thank you!
 **Best Regards,**  
 \<Your Name\>  
 \<Your Title / Team\>
+
+
+Below is a **compiled explanation** of how **AWS’s default in-transit encryption** works, why you might still need a **Service Control Policy (SCP)** to explicitly deny unencrypted traffic, and how these two concepts fit together.
+
+---
+
+## 1. AWS “Default” Encryption in Transit
+1. **TLS by Default**  
+   For many AWS services (such as SNS, SQS, etc.), the **public endpoints** provided by AWS **use TLS/HTTPS** by default. If you’re using something like `https://sqs.us-east-1.amazonaws.com`, your traffic is automatically encrypted in transit with TLS.  
+   
+2. **No Simple ‘Off Switch’**  
+   AWS generally does **not** provide a straightforward setting to disable TLS on these public endpoints. So, you often can’t just “turn off” encryption in transit at the click of a button in the AWS console.
+
+3. **Why This Might Not Be Enough**  
+   - **Edge Cases**: Some services (including SNS and SQS) technically allow HTTP endpoints (e.g., for certain legacy or custom configurations), even if that’s rare or non-default.  
+   - **Subscriptions and Integrations**: You can sometimes set up subscriptions or endpoints on SNS that use `http://` instead of `https://`.  
+   - **Compliance**: Certain security frameworks (HIPAA, PCI, etc.) require **explicit** enforcement of TLS at the organizational or resource level (beyond just the AWS default).
+
+---
+
+## 2. Why You Still Might Need an SCP (Service Control Policy)
+1. **Defense-in-Depth**  
+   An SCP that denies `aws:SecureTransport = false` stops any non-TLS traffic *before* it even reaches the resource. Even if AWS defaults to TLS, this is a **belt-and-suspenders** approach ensuring that no one can bypass the default with a misconfiguration.
+
+2. **Organizational Enforcement**  
+   An SCP applies at the AWS Organizations or OU level, so **all** accounts (and all services within them) are covered automatically. You don’t need to rely on each team or developer to manually add “deny HTTP” statements to every resource policy.
+
+3. **Auditing & Compliance**  
+   Auditors often look for a **formal policy** that explicitly disallows unencrypted connections. An SCP or resource policy that says “deny `aws:SecureTransport = false`” is a clear, auditable guardrail showing you have zero tolerance for HTTP traffic.
+
+4. **Future-Proofing**  
+   If AWS introduces new features or if someone tries to create a custom (non-public) endpoint that might allow HTTP, an SCP ensures these attempts are denied by default.
+
+---
+
+## 3. How SCPs and Resource Policies Interact
+1. **SCP Is Evaluated First**  
+   When a request is made (e.g., to create, update, or use SNS or SQS), AWS Organizations evaluates the SCP **before** looking at the resource policy. If the SCP denies the action (because it’s not using TLS), the request is blocked outright.
+
+2. **No Changes to Existing Resource Policies**  
+   An SCP **does not overwrite** or edit the resource policy. It simply **allows or denies** actions at the organizational level. If the SCP denies an action, it never even gets down to the resource policy stage.
+
+3. **Existing Unrestricted Resource Policies**  
+   Even if an SNS or SQS policy *does not* explicitly deny unencrypted traffic, the SCP will still block any HTTP requests. So, the resource policy doesn’t need to be updated for the deny to take effect—**the SCP alone** will handle it.
+
+---
+
+## 4. Conclusion: Why an SCP Is Often Best
+1. **Simplicity**: A single SCP at the org or OU level is generally **simpler** than relying on every application team to configure their own resource policies.  
+2. **Wide Coverage**: It ensures **all** accounts and services enforce encryption in transit—no exceptions.  
+3. **Compliance**: It’s easier to demonstrate to auditors that you have a top-level, mandatory policy denying any unencrypted traffic.  
+4. **Minimal Disruption**: Because AWS endpoints default to TLS, most existing workloads are unaffected. The SCP simply blocks any accidental or edge-case HTTP attempts.
+
+In short, **AWS’s default encryption in transit** covers most normal use cases, but a **deny SCP** for `aws:SecureTransport = false` delivers organization-wide, explicit enforcement—closing any loopholes and satisfying strict compliance or security requirements.

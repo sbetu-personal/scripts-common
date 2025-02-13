@@ -1,3 +1,38 @@
+Below is a **sample email** you could send as a reply to your AWS Support case, summarizing your understanding and requesting **official confirmation** about how encryption in transit works for SNS and SQS, and how an SCP interacts with it. Adjust any specific names or references as needed.
+
+---
+
+**Subject:** [Case \#XXXXXX] – Clarification on SNS and SQS In-Transit Encryption & SCP Enforcement
+
+Hello AWS Support Team,
+
+Thank you for your detailed explanation regarding SNS and SQS in-transit encryption. I’d like to confirm a couple of points to ensure complete clarity on our end:
+
+1. **Default Encryption in Transit**  
+   - As I understand it, SNS and SQS default to TLS (HTTPS) for the standard AWS endpoints, and there’s no direct option to “turn off” this encryption.  
+   - However, it’s technically still possible to use HTTP for certain legacy or custom configurations.
+
+2. **Need for SCP**  
+   - We plan to implement a **Service Control Policy (SCP)** that denies requests where `aws:SecureTransport = false`. My understanding is this effectively **blocks** any attempt to use HTTP, even if a user or application tries to explicitly do so.  
+   - Since the SCP is evaluated at the organization/OU level, it will enforce TLS-only across all accounts, regardless of any resource-specific policies.
+
+3. **Impact on Existing Policies**  
+   - The existing SNS or SQS resource policies don’t automatically reject unencrypted traffic, but the SCP would deny any HTTP request **before** it reaches those resources.  
+   - So, even if a resource policy doesn’t mention `aws:SecureTransport`, the SCP alone will be enough to prevent insecure connections.
+
+Could you please **confirm** the above points are correct, specifically:
+
+- That SNS and SQS do indeed default to TLS, but can still accept HTTP if a user or configuration is not enforced otherwise?  
+- That an SCP denying `aws:SecureTransport = false` would universally block all such unencrypted requests in our AWS Organization?  
+- That resource-level policies don’t need to be updated if the SCP is in place?
+
+Thank you again for your assistance, and I look forward to your confirmation.
+
+  
+**Best regards,**  
+_\<Your Name\>_  
+_\<Your Role / Team\>_  
+
 Below is a **sample email** you could send to your architect, politely requesting that an SCP be created to enforce secure transport for SNS and SQS. Feel free to tweak the tone or details to match your internal processes and naming conventions.
 
 ---

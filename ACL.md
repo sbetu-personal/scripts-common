@@ -103,63 +103,77 @@ process {
 ```powershell
 <#
 .SYNOPSIS
-Validates ACL export/import functionality with full audit checks
+Updated demo test script with fixes for ACL testing
 #>
 
-[CmdletBinding()]
-param()
-
-# Require admin and elevate if needed
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator)) {
+# Require admin privileges
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Start-Process powershell "-File `"$PSCommandPath`"" -Verb RunAs
     exit
 }
 
-# Configuration
-$basePath = "D:\Scripts\ACL_Test"
-$sourceFolder = "$basePath\Source"
-$targetFolder = "$basePath\Target"
-$exportFile = "$basePath\SecurityDescriptor.xml"
+# Set paths
+$basePath = "D:\Scripts\ACL_Demo"
+$sourceFolder = "$basePath\TestSource"
+$targetFolder = "$basePath\TestTarget"
+$exportFile = "$basePath\ExportedACL.xml"
 
-# Initialize test environment
-if (Test-Path $basePath) { Remove-Item $basePath -Recurse -Force }
+# Clean previous test
+if (Test-Path $basePath) { Remove-Item $basePath -Recurse -Force -Confirm:$false }
+
+# Create test environment
 New-Item -Path $sourceFolder -ItemType Directory -Force | Out-Null
 New-Item -Path $targetFolder -ItemType Directory -Force | Out-Null
 
-# Set test ACLs
-function Set-TestACL {
+# Function to create valid ACL rules
+
+function Set-SampleACL {
     param($Path)
-    $acl = Get-Acl $Path
-    $acl.SetAccessRuleProtection($true, $false)  # Break inheritance
+    $item = Get-Item $Path
+    $acl = $item.GetAccessControl()
+    
+    # Clear existing rules safely
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+    
+    # Add DACL rules
+    $inheritance = if ($item.PSIsContainer) {
+        [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    } else {
+        [System.Security.AccessControl.InheritanceFlags]::None
+    }
 
-    # DACL Rules
-    $rules = @(
-        [System.Security.AccessControl.FileSystemAccessRule]::new(
-            "Users",
-            "ReadAndExecute",
-            "ContainerInherit,ObjectInherit",
-            "None",
-            "Allow"
-        ),
-        [System.Security.AccessControl.FileSystemAccessRule]::new(
-            "Administrators",
-            "FullControl",
-            "ContainerInherit,ObjectInherit",
-            "None",
-            "Allow"
-        )
+    $userRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "Users",
+        [System.Security.AccessControl.FileSystemRights]::ReadAndExecute,
+        $inheritance,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow
     )
-    $rules | ForEach-Object { $acl.AddAccessRule($_) }
+    
+    $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "Administrators",
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        $inheritance,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    )
 
-    # SACL Rules (folders only)
-    if ((Get-Item $Path) -is [System.IO.DirectoryInfo]) {
-        $auditRule = [System.Security.AccessControl.FileSystemAuditRule]::new(
+    $acl.AddAccessRule($userRule)
+    $acl.AddAccessRule($adminRule)
+
+    # Add SACL for folders
+    if ($item.PSIsContainer) {
+        $auditInheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit
+        $auditInheritance = $auditInheritance -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+        
+        $auditRule = New-Object System.Security.AccessControl.FileSystemAuditRule(
             "Everyone",
-            "Write",
-            "Success",
-            "ContainerInherit,ObjectInherit",
-            "None"
+            [System.Security.AccessControl.FileSystemRights]::Write,
+            $auditInheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AuditFlags]::Success
         )
         $acl.AddAuditRule($auditRule)
     }
@@ -167,28 +181,35 @@ function Set-TestACL {
     Set-Acl -Path $Path -AclObject $acl
 }
 
-# Apply test permissions
-Set-TestACL -Path $sourceFolder
+# Set sample ACLs on source folder only
+Set-SampleACL -Path $sourceFolder
 
-# Export/Import workflow
+# Export/Import ACLs
 .\Export-Acl.ps1 -SourcePath $sourceFolder -ExportPath $exportFile
 .\Import-Acl.ps1 -ImportPath $exportFile -TargetPath $targetFolder
 
-# Validation functions
-function Compare-SecurityDescriptors {
+# Verification function
+function Compare-ACLs {
     param($PathA, $PathB)
     
     $aclA = Get-Acl $PathA -Audit
     $aclB = Get-Acl $PathB -Audit
 
-    return [PSCustomObject]@{
+    $compare = [PSCustomObject]@{
         DACLMatch = ($aclA.Access | ConvertTo-Json) -eq ($aclB.Access | ConvertTo-Json)
         SACLMatch = ($aclA.Audit | ConvertTo-Json) -eq ($aclB.Audit | ConvertTo-Json)
     }
+
+    return $compare
 }
 
-# Execute comparison
-$result = Compare-SecurityDescriptors -PathA $sourceFolder -PathB $targetFolder
+# Perform comparison
+$comparison = Compare-ACLs -PathA $sourceFolder -PathB $targetFolder
+
+# Results
+Write-Host "`nTest Results:" -ForegroundColor Cyan
+Write-Host "DACL Match: $($comparison.DACLMatch)" -ForegroundColor $(if ($comparison.DACLMatch) {"Green"} else {"Red"})
+Write-Host "SACL Match: $($comparison.SACLMatch)" -ForegroundColor $(if ($comparison.SACLMatch) {"Green"} else {"Red"})
 
 # Detailed output
 
@@ -197,9 +218,6 @@ Write-Host "`nSource SACL Audit Rules:"
 
 Write-Host "`nTarget SACL Audit Rules:"
 (Get-Acl -Path $targetFolder -Audit).Audit | Format-Table IdentityReference, FileSystemRights, AuditFlags -AutoSize
-
-# Cleanup
-Remove-Item $basePath -Recurse -Force -ErrorAction SilentlyContinue
 ```
 
 ### Key Features:

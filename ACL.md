@@ -178,8 +178,8 @@ Set-TestACL -Path $sourceFolder
 function Compare-SecurityDescriptors {
     param($PathA, $PathB)
     
-    $aclA = Get-Acl $PathA
-    $aclB = Get-Acl $PathB
+    $aclA = Get-Acl $PathA -Audit
+    $aclB = Get-Acl $PathB -Audit
 
     return [PSCustomObject]@{
         DACLMatch = ($aclA.Access | ConvertTo-Json) -eq ($aclB.Access | ConvertTo-Json)
@@ -190,10 +190,13 @@ function Compare-SecurityDescriptors {
 # Execute comparison
 $result = Compare-SecurityDescriptors -PathA $sourceFolder -PathB $targetFolder
 
-# Output results
-Write-Host "`nValidation Results:" -ForegroundColor Cyan
-Write-Host ("DACL Match: {0}" -f $result.DACLMatch) -ForegroundColor ($result.DACLMatch ? "Green" : "Red")
-Write-Host ("SACL Match: {0}" -f $result.SACLMatch) -ForegroundColor ($result.SACLMatch ? "Green" : "Red")
+# Detailed output
+
+Write-Host "`nSource SACL Audit Rules:"
+(Get-Acl -Path $sourceFolder -Audit).Audit | Format-Table IdentityReference, FileSystemRights, AuditFlags -AutoSize
+
+Write-Host "`nTarget SACL Audit Rules:"
+(Get-Acl -Path $targetFolder -Audit).Audit | Format-Table IdentityReference, FileSystemRights, AuditFlags -AutoSize
 
 # Cleanup
 Remove-Item $basePath -Recurse -Force -ErrorAction SilentlyContinue

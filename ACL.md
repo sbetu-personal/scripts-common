@@ -115,7 +115,8 @@ catch {
 Validates the complete ACL export/import process
 
 .DESCRIPTION
-Creates test environment, sets permissions, and verifies migration
+Creates test environment, sets permissions, and verifies migration,
+then cleans up.
 #>
 
 [CmdletBinding()]
@@ -129,32 +130,45 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 }
 
 # Configuration
-$basePath = "D:\Scripts\ACL_Test"
-$sourceFolder = "$basePath\Source"
-$targetFolder = "$basePath\Target"
-$exportFile = "$basePath\SecurityDescriptor.xml"
+$basePath     = "D:\Scripts\ACL_Test"
+$sourceFolder = Join-Path $basePath "Source"
+$targetFolder = Join-Path $basePath "Target"
+$exportFile   = Join-Path $basePath "SecurityDescriptor.xml"
 
-# Initialize environment
+# Clean up if the base path already exists
 try {
-    if (Test-Path $basePath) { Remove-Item $basePath -Recurse -Force }
+    if (Test-Path $basePath) {
+        Remove-Item $basePath -Recurse -Force
+    }
+    # Recreate folders
     New-Item -Path $sourceFolder -ItemType Directory -Force | Out-Null
     New-Item -Path $targetFolder -ItemType Directory -Force | Out-Null
-    $testFile = New-Item -Path "$sourceFolder\TestFile.txt" -ItemType File -Force
+    
+    # Create a test file in Source
+    $testFile = New-Item -Path (Join-Path $sourceFolder "TestFile.txt") -ItemType File -Force
 }
 catch {
     Write-Error "Test setup failed: $_"
     exit 1
 }
 
-# Set test permissions (updated)
+# Function to set test ACL (grant 'Users' Read/Execute, plus local Administrators FullControl, SACL for Everyone)
 function Set-TestACL {
-    param($Path)
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+
     $acl = Get-Acl $Path
     $isDirectory = (Get-Item $Path) -is [System.IO.DirectoryInfo]
-    
-    $acl.SetAccessRuleProtection($true, $false)
-    $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
 
+    # Disable inheritance and remove existing permissions
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in $acl.Access) {
+        $acl.RemoveAccessRule($rule) | Out-Null
+    }
+
+    # Decide inheritance flags
     $inheritance = if ($isDirectory) {
         [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
         [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
@@ -162,15 +176,29 @@ function Set-TestACL {
         [System.Security.AccessControl.InheritanceFlags]::None
     }
 
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    # 1) Allow 'Users' to Read & Execute
+    $ruleUsers = New-Object System.Security.AccessControl.FileSystemAccessRule(
         "Users",
         [System.Security.AccessControl.FileSystemRights]::ReadAndExecute,
         $inheritance,
         [System.Security.AccessControl.PropagationFlags]::None,
         [System.Security.AccessControl.AccessControlType]::Allow
     )
-    $acl.AddAccessRule($rule)
+    $acl.AddAccessRule($ruleUsers)
 
+    # 2) Allow BUILTIN\Administrators FullControl so we can delete files/folders
+    $ruleAdmins = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "BUILTIN\Administrators",
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        $inheritance,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $acl.AddAccessRule($ruleAdmins)
+
+    # If directory, add an audit rule for Everyone (SACL). 
+    # (Note: reading/writing the SACL requires SeSecurityPrivilege, 
+    #  but as an admin on a normal Windows 10/11 environment, it usually works.)
     if ($isDirectory) {
         $auditRule = New-Object System.Security.AccessControl.FileSystemAuditRule(
             "Everyone",
@@ -185,7 +213,7 @@ function Set-TestACL {
     Set-Acl -Path $Path -AclObject $acl
 }
 
-# Apply test settings
+# Apply our test ACLs to the Source folder and the test file
 Set-TestACL -Path $sourceFolder
 Set-TestACL -Path $testFile.FullName
 
@@ -202,8 +230,16 @@ catch {
 # Verification
 .\Verify-ACL.ps1 -Source $sourceFolder -Target $targetFolder
 
+<#
 # Cleanup
-Remove-Item $basePath -Recurse -Force -ErrorAction SilentlyContinue
+try {
+    Remove-Item $basePath -Recurse -Force -ErrorAction Stop
+    Write-Host "Cleanup complete. '$basePath' removed."
+}
+catch {
+    Write-Warning "Cleanup failed to remove '$basePath': $_"
+}
+#>
 ```
 
 ---
@@ -212,10 +248,13 @@ Remove-Item $basePath -Recurse -Force -ErrorAction SilentlyContinue
 ```powershell
 <#
 .SYNOPSIS
-Compares security descriptors between two paths
+Compares security descriptors between two paths (Source & Target).
 
 .DESCRIPTION
-Detailed comparison of permissions, audit rules, and ownership
+1. Ensures both paths exist.
+2. Retrieves each path’s Owner, DACL (Access), and SACL (Audit).
+3. Compares them and shows if they match or differ.
+4. Displays mismatches in detail (DACL and SACL differences), indicating which side (Source or Target) has them.
 
 .PARAMETER Source
 Original path to compare
@@ -236,56 +275,141 @@ param(
     [string]$Target
 )
 
-function Get-ACLDetail {
-    param($Path)
-    $acl = Get-Acl -Path $Path -Audit
-    return [PSCustomObject]@{
-        Path = $Path
-        Owner = $acl.Owner
-        Access = $acl.Access | ForEach-Object {
-            [PSCustomObject]@{
-                Identity = $_.IdentityReference
-                Rights = $_.FileSystemRights
-                Type = $_.AccessControlType
-                Inherited = $_.IsInherited
-                Inheritance = $_.InheritanceFlags
-                Propagation = $_.PropagationFlags
+# 1) Validate the paths
+if (-not (Test-Path $Source)) {
+    Write-Error "Source path '$Source' does not exist."
+    exit 1
+}
+if (-not (Test-Path $Target)) {
+    Write-Error "Target path '$Target' does not exist."
+    exit 1
+}
+
+# 2) Function to retrieve ACL data (Owner, DACL, SACL)
+function Get-ACLData {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+
+    try {
+        # -Audit is required to see SACL, and requires admin privileges
+        $acl = Get-Acl -Path $Path -Audit -ErrorAction Stop
+
+        return [PSCustomObject]@{
+            Path  = $Path
+            Owner = $acl.Owner
+
+            Access = $acl.Access | ForEach-Object {
+                [PSCustomObject]@{
+                    IdentityReference = $_.IdentityReference.Value
+                    FileSystemRights  = $_.FileSystemRights
+                    AccessControlType = $_.AccessControlType
+                    IsInherited       = $_.IsInherited
+                    InheritanceFlags  = $_.InheritanceFlags
+                    PropagationFlags  = $_.PropagationFlags
+                }
             }
-        }
-        Audit = $acl.Audit | ForEach-Object {
-            [PSCustomObject]@{
-                Identity = $_.IdentityReference
-                Rights = $_.FileSystemRights
-                Flags = $_.AuditFlags
-                Inheritance = $_.InheritanceFlags
+
+            Audit = $acl.Audit | ForEach-Object {
+                [PSCustomObject]@{
+                    IdentityReference = $_.IdentityReference.Value
+                    FileSystemRights  = $_.FileSystemRights
+                    AuditFlags        = $_.AuditFlags
+                    InheritanceFlags  = $_.InheritanceFlags
+                    PropagationFlags  = $_.PropagationFlags
+                }
             }
         }
     }
+    catch {
+        Write-Error "Failed to retrieve ACL for path: $Path. Error: $_"
+        exit 1
+    }
 }
 
-$sourceData = Get-ACLDetail -Path $Source
-$targetData = Get-ACLDetail -Path $Target
+# 3) Retrieve source & target ACL details
+$sourceAclData = Get-ACLData -Path $Source
+$targetAclData = Get-ACLData -Path $Target
 
-# Compare results
-$results = [PSCustomObject]@{
-    DACLMatch = (-not (Compare-Object $sourceData.Access $targetData.Access))
-    SACLMatch = (-not (Compare-Object $sourceData.Audit $targetData.Audit))
-    OwnerMatch = $sourceData.Owner -eq $targetData.Owner
+# 4) Compare DACL (Access). Include SideIndicator so we know which side it's on.
+$daclDiff = Compare-Object `
+    -ReferenceObject $sourceAclData.Access `
+    -DifferenceObject $targetAclData.Access `
+    -Property IdentityReference,FileSystemRights,AccessControlType,IsInherited,InheritanceFlags,PropagationFlags `
+    -IncludeEqual:$false  # We only want differences
+
+# If $daclDiff is empty, the DACLs match
+$daclMatch = $true
+if ($daclDiff) {
+    $daclMatch = $false
 }
 
-# Output
-Write-Host "`nSecurity Validation Report" -ForegroundColor Cyan
-Write-Host ("{0,-15} {1}" -f "Source Path:", $Source)
-Write-Host ("{0,-15} {1}" -f "Target Path:", $Target)
+# 5) Compare SACL (Audit) similarly
+$saclDiff = Compare-Object `
+    -ReferenceObject $sourceAclData.Audit `
+    -DifferenceObject $targetAclData.Audit `
+    -Property IdentityReference,FileSystemRights,AuditFlags `
+    -IncludeEqual:$false
 
-$ownerColor = if ($results.OwnerMatch) { "Green" } else { "Red" }
-Write-Host ("{0,-15} {1}" -f "Owner Match:", $results.OwnerMatch) -ForegroundColor $ownerColor
+$saclMatch = $true
+if ($saclDiff) {
+    $saclMatch = $false
+}
 
-$daclColor = if ($results.DACLMatch) { "Green" } else { "Red" }
-Write-Host ("{0,-15} {1}" -f "DACL Match:", $results.DACLMatch) -ForegroundColor $daclColor
+# 6) Compare Owner
+$ownerMatch = $sourceAclData.Owner -eq $targetAclData.Owner
 
-$saclColor = if ($results.SACLMatch) { "Green" } else { "Red" }
-Write-Host ("{0,-15} {1}" -f "SACL Match:", $results.SACLMatch) -ForegroundColor $saclColor
+# 7) Output a summary header
+Write-Host "`n=== Security Validation Report ===" -ForegroundColor Cyan
+Write-Host "Source Path: $Source"
+Write-Host "Target Path: $Target"
+
+# 8) Display result of Owner match
+if ($ownerMatch) {
+    Write-Host "Owner Match: $ownerMatch" -ForegroundColor Green
+}
+else {
+    Write-Host "Owner Match: $ownerMatch" -ForegroundColor Red
+    Write-Host "  Source Owner: $($sourceAclData.Owner)"
+    Write-Host "  Target Owner: $($targetAclData.Owner)"
+}
+
+# 9) Display DACL match
+if ($daclMatch) {
+    Write-Host "DACL Match: $daclMatch" -ForegroundColor Green
+}
+else {
+    Write-Host "DACL Match: $daclMatch" -ForegroundColor Red
+    Write-Host "`nDACL Differences (with side):" -ForegroundColor Yellow
+    
+    # Show the difference, with an "Origin" column that says "Source" or "Target" based on SideIndicator
+    $daclDiff | Select-Object `
+        IdentityReference,FileSystemRights,AccessControlType,IsInherited,InheritanceFlags,PropagationFlags,
+        @{ Name='Origin'; Expression = {
+            if ($_.SideIndicator -eq '<=') {'Source'} else {'Target'}
+        }} |
+        Format-Table -AutoSize
+}
+
+# 10) Display SACL match
+if ($saclMatch) {
+    Write-Host "SACL Match: $saclMatch" -ForegroundColor Green
+}
+else {
+    Write-Host "SACL Match: $saclMatch" -ForegroundColor Red
+    Write-Host "`nSACL Differences (with side):" -ForegroundColor Yellow
+
+    $saclDiff | Select-Object `
+        IdentityReference,FileSystemRights,AuditFlags,InheritanceFlags,PropagationFlags,
+        @{ Name='Origin'; Expression = {
+            if ($_.SideIndicator -eq '<=') {'Source'} else {'Target'}
+        }} |
+        Format-Table -AutoSize
+}
+
+Write-Host "`nVerification Complete."
+
 ```
 
 ---

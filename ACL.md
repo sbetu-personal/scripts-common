@@ -136,7 +136,7 @@ $exportFile = "$basePath\SecurityDescriptor.xml"
 
 # Initialize environment
 try {
-    if (Test-Path $basePath) { Remove-Item $basePath -Recurse -Force -ErrorAction Stop }
+    if (Test-Path $basePath) { Remove-Item $basePath -Recurse -Force }
     New-Item -Path $sourceFolder -ItemType Directory -Force | Out-Null
     New-Item -Path $targetFolder -ItemType Directory -Force | Out-Null
     $testFile = New-Item -Path "$sourceFolder\TestFile.txt" -ItemType File -Force
@@ -146,30 +146,36 @@ catch {
     exit 1
 }
 
-# Set test permissions
+# Set test permissions (updated)
 function Set-TestACL {
     param($Path)
     $acl = Get-Acl $Path
-    $acl.SetAccessRuleProtection($true, $false)
+    $isDirectory = (Get-Item $Path) -is [System.IO.DirectoryInfo]
     
-    # Add DACL
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+
+    $inheritance = if ($isDirectory) {
+        [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    } else {
+        [System.Security.AccessControl.InheritanceFlags]::None
+    }
+
     $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
         "Users",
         [System.Security.AccessControl.FileSystemRights]::ReadAndExecute,
-        ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
-        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+        $inheritance,
         [System.Security.AccessControl.PropagationFlags]::None,
         [System.Security.AccessControl.AccessControlType]::Allow
     )
     $acl.AddAccessRule($rule)
 
-    # Add SACL for directories
-    if ($Path -like "*Directory*") {
+    if ($isDirectory) {
         $auditRule = New-Object System.Security.AccessControl.FileSystemAuditRule(
             "Everyone",
             [System.Security.AccessControl.FileSystemRights]::Write,
-            ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
-            [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+            $inheritance,
             [System.Security.AccessControl.PropagationFlags]::None,
             [System.Security.AccessControl.AuditFlags]::Success
         )
@@ -232,34 +238,28 @@ param(
 
 function Get-ACLDetail {
     param($Path)
-    try {
-        $acl = Get-Acl -Path $Path -Audit
-        return [PSCustomObject]@{
-            Path = $Path
-            Owner = $acl.Owner
-            Access = $acl.Access | ForEach-Object {
-                [PSCustomObject]@{
-                    Identity = $_.IdentityReference
-                    Rights = $_.FileSystemRights
-                    Type = $_.AccessControlType
-                    Inherited = $_.IsInherited
-                    Inheritance = $_.InheritanceFlags
-                    Propagation = $_.PropagationFlags
-                }
-            }
-            Audit = $acl.Audit | ForEach-Object {
-                [PSCustomObject]@{
-                    Identity = $_.IdentityReference
-                    Rights = $_.FileSystemRights
-                    Flags = $_.AuditFlags
-                    Inheritance = $_.InheritanceFlags
-                }
+    $acl = Get-Acl -Path $Path -Audit
+    return [PSCustomObject]@{
+        Path = $Path
+        Owner = $acl.Owner
+        Access = $acl.Access | ForEach-Object {
+            [PSCustomObject]@{
+                Identity = $_.IdentityReference
+                Rights = $_.FileSystemRights
+                Type = $_.AccessControlType
+                Inherited = $_.IsInherited
+                Inheritance = $_.InheritanceFlags
+                Propagation = $_.PropagationFlags
             }
         }
-    }
-    catch {
-        Write-Error "Failed to retrieve ACL for $Path : $_"
-        exit 1
+        Audit = $acl.Audit | ForEach-Object {
+            [PSCustomObject]@{
+                Identity = $_.IdentityReference
+                Rights = $_.FileSystemRights
+                Flags = $_.AuditFlags
+                Inheritance = $_.InheritanceFlags
+            }
+        }
     }
 }
 
@@ -268,43 +268,24 @@ $targetData = Get-ACLDetail -Path $Target
 
 # Compare results
 $results = [PSCustomObject]@{
-    DACLMatch = $false
-    SACLMatch = $false
+    DACLMatch = (-not (Compare-Object $sourceData.Access $targetData.Access))
+    SACLMatch = (-not (Compare-Object $sourceData.Audit $targetData.Audit))
     OwnerMatch = $sourceData.Owner -eq $targetData.Owner
 }
-
-# DACL comparison
-$daclDiff = Compare-Object $sourceData.Access $targetData.Access -Property Identity, Rights, Type, Inherited
-$results.DACLMatch = (-not $daclDiff)
-
-# SACL comparison
-$saclDiff = Compare-Object $sourceData.Audit $targetData.Audit -Property Identity, Rights, Flags
-$results.SACLMatch = (-not $saclDiff)
 
 # Output
 Write-Host "`nSecurity Validation Report" -ForegroundColor Cyan
 Write-Host ("{0,-15} {1}" -f "Source Path:", $Source)
 Write-Host ("{0,-15} {1}" -f "Target Path:", $Target)
-Write-Host ("{0,-15} {1}" -f "Owner Match:", $results.OwnerMatch) -ForegroundColor ($results.OwnerMatch ? "Green" : "Red")
-Write-Host ("{0,-15} {1}" -f "DACL Match:", $results.DACLMatch) -ForegroundColor ($results.DACLMatch ? "Green" : "Red")
-Write-Host ("{0,-15} {1}" -f "SACL Match:", $results.SACLMatch) -ForegroundColor ($results.SACLMatch ? "Green" : "Red")
 
-if (-not $results.DACLMatch) {
-    Write-Host "`nDACL Differences:" -ForegroundColor Yellow
-    $daclDiff | Format-Table -Property @{Label="Side";Expression={$_.SideIndicator}}, 
-        Identity, Rights, Type, Inherited -AutoSize
-}
+$ownerColor = if ($results.OwnerMatch) { "Green" } else { "Red" }
+Write-Host ("{0,-15} {1}" -f "Owner Match:", $results.OwnerMatch) -ForegroundColor $ownerColor
 
-if (-not $results.SACLMatch) {
-    Write-Host "`nSACL Differences:" -ForegroundColor Yellow
-    $saclDiff | Format-Table -Property @{Label="Side";Expression={$_.SideIndicator}}, 
-        Identity, Rights, Flags -AutoSize
-}
+$daclColor = if ($results.DACLMatch) { "Green" } else { "Red" }
+Write-Host ("{0,-15} {1}" -f "DACL Match:", $results.DACLMatch) -ForegroundColor $daclColor
 
-if (-not $results.OwnerMatch) {
-    Write-Host "`nOwnership Mismatch:" -ForegroundColor Yellow
-    Write-Host ("Source Owner: {0}`nTarget Owner: {1}" -f $sourceData.Owner, $targetData.Owner)
-}
+$saclColor = if ($results.SACLMatch) { "Green" } else { "Red" }
+Write-Host ("{0,-15} {1}" -f "SACL Match:", $results.SACLMatch) -ForegroundColor $saclColor
 ```
 
 ---

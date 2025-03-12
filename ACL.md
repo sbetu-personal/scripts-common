@@ -446,3 +446,119 @@ Write-Host "`nVerification Complete."
 - **Self-Contained Testing**: Includes cleanup functions
 
 This final version provides enterprise-grade ACL management with full validation capabilities.
+
+
+Here are the commands to verify both DACLs (permissions) and SACLs (audit rules) after export/import:
+
+---
+
+### **1. Check DACLs (Permissions)**
+```powershell
+# For source
+(Get-Acl -Path "D:\Scripts\ACL_Demo\TestSource").Access | 
+Format-Table IdentityReference, FileSystemRights, AccessControlType, IsInherited, InheritanceFlags -AutoSize
+
+# For target
+(Get-Acl -Path "D:\Scripts\ACL_Demo\TestTarget").Access | 
+Format-Table IdentityReference, FileSystemRights, AccessControlType, IsInherited, InheritanceFlags -AutoSize
+```
+
+---
+
+### **2. Check SACLs (Audit Rules)**
+```powershell
+# For source (requires admin)
+(Get-Acl -Path "D:\Scripts\ACL_Demo\TestSource" -Audit).Audit | 
+Format-Table IdentityReference, FileSystemRights, AuditFlags, InheritanceFlags -AutoSize
+
+# For target (requires admin)
+(Get-Acl -Path "D:\Scripts\ACL_Demo\TestTarget" -Audit).Audit | 
+Format-Table IdentityReference, FileSystemRights, AuditFlags, InheritanceFlags -AutoSize
+```
+
+---
+
+### **3. Compare Source ↔ Target (PowerShell Diff)**
+```powershell
+# Compare DACLs
+$sourceDACL = (Get-Acl "D:\Scripts\ACL_Demo\TestSource").Access | ConvertTo-Json
+$targetDACL = (Get-Acl "D:\Scripts\ACL_Demo\TestTarget").Access | ConvertTo-Json
+$sourceDACL -eq $targetDACL  # Should return True
+
+# Compare SACLs (admin required)
+$sourceSACL = (Get-Acl "D:\Scripts\ACL_Demo\TestSource" -Audit).Audit | ConvertTo-Json
+$targetSACL = (Get-Acl "D:\Scripts\ACL_Demo\TestTarget" -Audit).Audit | ConvertTo-Json
+$sourceSACL -eq $targetSACL  # Should return True
+```
+
+---
+
+### **4. Full Security Descriptor Export (For Deep Inspection)**
+```powershell
+# Export both to files
+Get-Acl "D:\Scripts\ACL_Demo\TestSource" | ConvertTo-Json | Out-File "Source_ACL.txt"
+Get-Acl "D:\Scripts\ACL_Demo\TestTarget" | ConvertTo-Json | Out-File "Target_ACL.txt"
+
+# Compare with VS Code
+code --diff Source_ACL.txt Target_ACL.txt
+```
+
+---
+
+### **Key Verification Points**
+1. **Identity References**: Same users/groups in both
+2. **Permissions**: Matching `FileSystemRights` and `AccessControlType`
+3. **Inheritance**: Same `InheritanceFlags` and `IsInherited` status
+4. **Audit Rules**: Matching `AuditFlags` (Success/Failure) and operations
+
+---
+
+### **Expected Successful Output**
+```powershell
+# DACL Example
+IdentityReference       FileSystemRights     AccessControlType IsInherited
+-----------------       ----------------     ----------------- -----------
+BUILTIN\Administrators  FullControl          Allow            False
+BUILTIN\Users           ReadAndExecute       Allow            False
+
+# SACL Example
+IdentityReference FileSystemRights AuditFlags
+----------------- ---------------- ----------
+Everyone          Write            Success
+```
+
+---
+
+### **Pro Tip: Verification Script**
+```powershell
+# Save as Verify-ACL.ps1
+param($Source, $Target)
+
+function Get-ACLSummary {
+    param($Path)
+    [PSCustomObject]@{
+        Path = $Path
+        Owner = (Get-Acl $Path).Owner
+        Access = (Get-Acl $Path).Access | ConvertTo-Json
+        Audit = (Get-Acl $Path -Audit).Audit | ConvertTo-Json
+    }
+}
+
+$source = Get-ACLSummary $Source
+$target = Get-ACLSummary $Target
+
+Write-Host "DACL Match: " -NoNewline
+Write-Host ($source.Access -eq $target.Access) -ForegroundColor Cyan
+
+Write-Host "SACL Match: " -NoNewline
+Write-Host ($source.Audit -eq $target.Audit) -ForegroundColor Cyan
+
+Compare-Object $source $target -Property Owner, Access, Audit
+```
+
+Run with:
+```powershell
+Verify-ACL.ps1 -Source "D:\Scripts\ACL_Demo\TestSource" -Target "D:\Scripts\ACL_Demo\TestTarget"
+```
+
+Your test results showing `DACL Match: True` and `SACL Match: True` confirm the permissions were transferred correctly, even if the console output appears sparse. The JSON comparison is the most reliable verification method.

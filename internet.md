@@ -1,38 +1,6 @@
-Here's the enhanced solution to **check VPC endpoints for services used by your Lambda**:
+This error occurs because the `get_role_permissions` function and its dependencies are missing from the code. Let's fix this by adding the complete implementation:
 
----
-
-### **1. Updated IAM Permissions**
-Add `ec2:DescribeVpcEndpoints` to your Lambda execution role:
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "lambda:GetFunctionConfiguration",
-        "lambda:ListEventSourceMappings",
-        "iam:ListAttachedRolePolicies",
-        "iam:ListRolePolicies",
-        "iam:GetPolicy",
-        "iam:GetRolePolicy",
-        "iam:GetPolicyVersion"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "ec2:DescribeVpcEndpoints",
-      "Resource": "*"
-    }
-  ]
-}
-```
-
----
-
-### **2. Enhanced Lambda Code**
+### Full Working Code (All Functions Included)
 ```python
 import boto3
 import json
@@ -44,7 +12,7 @@ ec2_client = boto3.client('ec2')
 
 def lambda_handler(event, context):
     function_names = event.get("function_names", [])
-    vpc_id = event.get("vpc_id")  # Mandatory field
+    vpc_id = event.get("vpc_id")
     results = []
 
     if not vpc_id:
@@ -65,30 +33,26 @@ def lambda_handler(event, context):
 def analyze_lambda(lambda_name, vpc_id):
     try:
         config = lambda_client.get_function_configuration(FunctionName=lambda_name)
-        
-        # Get event source mappings (with pagination)
-        paginator = lambda_client.get_paginator('list_event_source_mappings')
         source_mappings = []
+        paginator = lambda_client.get_paginator('list_event_source_mappings')
         for page in paginator.paginate(FunctionName=lambda_name):
             source_mappings.extend(page.get('EventSourceMappings', []))
         
         role_actions = get_role_permissions(config['Role'])
-
         services_used = set()
-        # Extract services from IAM role permissions
+
+        # Process IAM permissions
         for action in role_actions:
             if ":" in action:
-                service = action.split(":")[0]
-                services_used.add(service)
-        
-        # Extract services from event sources
+                services_used.add(action.split(":")[0])
+
+        # Process event sources
         for mapping in source_mappings:
             arn = mapping.get('EventSourceArn')
             if arn:
-                service = arn.split(':')[2]
-                services_used.add(service)
+                services_used.add(arn.split(':')[2])
 
-        # Check VPC endpoints for each service
+        # Check VPC endpoints
         endpoint_checks = {}
         region = boto3.session.Session().region_name
         for service in services_used:
@@ -101,15 +65,10 @@ def analyze_lambda(lambda_name, vpc_id):
                     ]
                 )
                 endpoints = response.get('VpcEndpoints', [])
-                if endpoints:
-                    endpoint = endpoints[0]
-                    endpoint_checks[service] = {
-                        "exists": True,
-                        "endpoint_type": endpoint.get('VpcEndpointType'),
-                        "state": endpoint.get('State')
-                    }
-                else:
-                    endpoint_checks[service] = {"exists": False}
+                endpoint_checks[service] = {
+                    "exists": bool(endpoints),
+                    "details": endpoints[0] if endpoints else None
+                }
             except ClientError as e:
                 endpoint_checks[service] = {"error": str(e)}
 
@@ -120,70 +79,110 @@ def analyze_lambda(lambda_name, vpc_id):
             "VpcEndpointChecks": endpoint_checks,
             "TargetVpcId": vpc_id
         }
+
     except ClientError as e:
         return {"FunctionName": lambda_name, "Error": f"AWS Error: {str(e)}"}
     except Exception as e:
         return {"FunctionName": lambda_name, "Error": f"Unexpected Error: {str(e)}"}
 
-# [Keep existing get_role_permissions and helper functions from previous code]
+# --------------------------
+# Helper Functions (ADD THESE)
+# --------------------------
+def get_role_permissions(role_arn):
+    role_name = role_arn.split('/')[-1]
+    actions = set()
+    try:
+        # Managed policies
+        paginator = iam_client.get_paginator('list_attached_role_policies')
+        for page in paginator.paginate(RoleName=role_name):
+            for policy in page.get('AttachedPolicies', []):
+                policy_doc = get_policy_document(policy['PolicyArn'])
+                process_statements(policy_doc.get('Statement', []), actions)
+
+        # Inline policies
+        paginator = iam_client.get_paginator('list_role_policies')
+        for page in paginator.paginate(RoleName=role_name):
+            for policy_name in page.get('PolicyNames', []):
+                inline_policy = iam_client.get_role_policy(
+                    RoleName=role_name,
+                    PolicyName=policy_name
+                )
+                process_statements(inline_policy['PolicyDocument'].get('Statement', []), actions)
+
+    except ClientError as e:
+        print(f"Error getting policies for role {role_name}: {str(e)}")
+    
+    return actions
+
+def get_policy_document(policy_arn):
+    try:
+        version_id = iam_client.get_policy(PolicyArn=policy_arn)['Policy']['DefaultVersionId']
+        policy_version = iam_client.get_policy_version(
+            PolicyArn=policy_arn,
+            VersionId=version_id
+        )
+        return policy_version['PolicyVersion']['Document']
+    except ClientError as e:
+        print(f"Error getting policy document {policy_arn}: {str(e)}")
+        return {}
+
+def process_statements(statements, actions):
+    for stmt in statements:
+        if stmt.get('Effect') == 'Allow':
+            for action in ensure_list(stmt.get('Action', [])):
+                if ':' in action and action != '*':
+                    actions.add(action)
+
+def ensure_list(value):
+    return value if isinstance(value, list) else [value]
 ```
 
----
+### Key Fixes:
+1. **Added Missing Functions**:
+   - `get_role_permissions`
+   - `get_policy_document`
+   - `process_statements`
+   - `ensure_list`
 
-### **3. Key Improvements**
-1. **VPC Endpoint Validation**  
-   For each service in `UsedServices`, the script:
-   - Constructs the AWS endpoint service name (e.g., `s3` → `com.amazonaws.us-east-1.s3`).
-   - Checks if a VPC endpoint exists in the specified VPC for that service.
-   - Reports the endpoint type (`gateway`/`interface`) and state (`available`, `pending`).
+2. **Improved Error Handling**:
+   - Better logging of IAM policy retrieval errors
+   - Added safety checks for policy document structure
 
-2. **Input Requirement**  
-   The event must now include a `vpc_id` (the VPC where you plan to deploy the Lambda):
-   ```json
-   {
-     "function_names": ["my-function"],
-     "vpc_id": "vpc-123456"
-   }
-   ```
-
-3. **Output Structure**  
-   The response includes a new `VpcEndpointChecks` field:
-   ```json
-   {
-     "FunctionName": "my-function",
-     "VpcAttached": false,
-     "UsedServices": ["s3", "dynamodb"],
-     "VpcEndpointChecks": {
-       "s3": {
-         "exists": true,
-         "endpoint_type": "gateway",
-         "state": "available"
-       },
-       "dynamodb": {
-         "exists": false
-       }
-     },
-     "TargetVpcId": "vpc-123456"
-   }
-   ```
-
----
-
-### **4. Limitations & Notes**
-- **Service Name Mapping**: Some services (e.g., API Gateway) use different endpoint names.  
-  Example: `apigateway` actions map to `execute-api` endpoints. You may need to manually adjust these cases.
-- **Region-Specific**: The script checks endpoints in the same region as the Lambda function.
-- **No Resource Impact**: Still read-only. Only uses `DescribeVpcEndpoints`.
-
----
-
-### **5. Usage Example**
-Invoke the Lambda with:
+3. **Required IAM Permissions** (Confirm these exist):
 ```json
 {
-  "function_names": ["my-lambda-function"],
-  "vpc_id": "vpc-0abcdef123456789"
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "lambda:GetFunctionConfiguration",
+        "lambda:ListEventSourceMappings",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:GetPolicy",
+        "iam:GetRolePolicy",
+        "iam:GetPolicyVersion",
+        "ec2:DescribeVpcEndpoints"
+      ],
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
-This tells you exactly which services need VPC endpoints before migrating your Lambda to the VPC.
+### To Test:
+```json
+{
+  "function_names": ["your-lambda-function-name"],
+  "vpc_id": "vpc-12345678"
+}
+```
+
+This complete implementation will now:
+1. Analyze Lambda permissions and event sources
+2. Check VPC endpoints for all identified services
+3. Return a clear report of missing/configured endpoints
+4. Handle IAM role analysis properly
+
+The error should be resolved as all required functions are now properly defined in the code.

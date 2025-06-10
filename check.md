@@ -1,8 +1,30 @@
-Sure! Here's the **fully revised and robust Azure CLI Bash script** with all the fixes applied:
+Thanks for confirming. Since you're **still getting the same `MissingSubscription` error**, even after setting the subscription, let's isolate and fix it properly.
 
 ---
 
-### ✅ **Revised `azi-roles.sh` Script**
+## 🔍 **Root Cause Analysis**
+
+The error message:
+
+> `(MissingSubscription) The request did not have a subscription or a valid tenant level resource provider.`
+
+means **Azure CLI is not applying the subscription context correctly**, even after `az account set`.
+
+This can happen due to:
+
+1. You **don't have access** to that subscription.
+2. You're **using `az role assignment create` without specifying `--subscription` explicitly**, which occasionally fails even after `az account set`.
+3. Azure CLI cache/session issues.
+
+---
+
+## ✅ **Definitive Fix: Use `--subscription` in `az role assignment create`**
+
+Update the script to **explicitly pass the `--subscription` parameter** to the `az role assignment create` commands:
+
+---
+
+### ✅ **Fully Updated Script (with explicit `--subscription`)**
 
 ```bash
 #!/bin/bash
@@ -12,15 +34,15 @@ app_name="SNW-ServiceNow-Prod"
 custom_role_name="ServiceNow Contributor"
 builtin_role="Reader"
 
-# List of Azure subscription IDs (replace with your actual 12 subscriptions)
+# List of Azure subscription IDs
 subscriptions=(
   "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
   "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
-  # Add the rest here
+  # Add all 12 subscription IDs here
 )
 
-# Get SP Object ID with filtering
-echo "Fetching Service Principal Object ID for '$app_name'..."
+# Get SP Object ID
+echo "🔍 Fetching Service Principal Object ID for '$app_name'..."
 sp_object_id=$(az ad sp list --filter "displayName eq '$app_name'" --query "[0].id" -o tsv)
 
 if [ -z "$sp_object_id" ]; then
@@ -35,32 +57,23 @@ for sub in "${subscriptions[@]}"
 do
   echo -e "\n🔄 Processing subscription: $sub"
   
-  # Set the subscription
-  if ! az account set --subscription "$sub"; then
-    echo "❌ Error: Failed to switch to subscription $sub. Skipping."
-    continue
-  fi
-
-  # Optional: show the active subscription
-  az account show --query "{Name:name, ID:id}" -o table
-
-  # Assign built-in Reader role
   echo "🔧 Assigning built-in '$builtin_role' role..."
   if ! az role assignment create \
     --assignee-object-id "$sp_object_id" \
     --assignee-principal-type ServicePrincipal \
     --role "$builtin_role" \
-    --scope "/subscriptions/$sub"; then
+    --scope "/subscriptions/$sub" \
+    --subscription "$sub"; then
     echo "⚠️ Warning: Failed to assign '$builtin_role' role in $sub"
   fi
 
-  # Assign custom ServiceNow Contributor role
   echo "🔧 Assigning custom '$custom_role_name' role..."
   if ! az role assignment create \
     --assignee-object-id "$sp_object_id" \
     --assignee-principal-type ServicePrincipal \
     --role "$custom_role_name" \
-    --scope "/subscriptions/$sub"; then
+    --scope "/subscriptions/$sub" \
+    --subscription "$sub"; then
     echo "⚠️ Warning: Failed to assign '$custom_role_name' role in $sub"
   fi
 
@@ -72,13 +85,20 @@ echo -e "\n🎉 All role assignments processed."
 
 ---
 
-### 📌 **Key Fixes Applied:**
+## ✅ Additional Checks
 
-* Ensures `az account set` works and displays current context.
-* Uses `--assignee-principal-type ServicePrincipal` as recommended.
-* Removes `--description` to avoid preview issues.
-* Includes clear logging and warnings.
+* Run `az account list --output table` and verify the subscriptions are **listed and accessible**.
+* Test one subscription manually:
+
+  ```bash
+  az role assignment create \
+    --assignee-object-id <SP-ID> \
+    --assignee-principal-type ServicePrincipal \
+    --role "Reader" \
+    --scope "/subscriptions/<sub-id>" \
+    --subscription <sub-id>
+  ```
 
 ---
 
-Let me know if you'd like a version that logs everything to a file or verifies the role assignments afterward.
+Let me know what happens after running this exact script, or share the next error if it still fails.

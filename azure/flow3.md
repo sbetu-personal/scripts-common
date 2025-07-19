@@ -1,77 +1,69 @@
-Below are **pure‑Azure‑CLI** one‑liners (no `jq`, no extra tools) that dump text you can
-*copy‑paste straight into the two arrays* in your flow‑log script.
+Thanks for the image — that repeating error:
+
+```
+doesn't exist in cloud 'AzureCloud': <GUID>
+```
+
+### 🔍 What’s happening
+
+This is an **Azure CLI bug or logging quirk**, usually triggered when listing VNets/subnets across multiple subscriptions or regions that include:
+
+* **Reserved system subnets**, like:
+
+  * `GatewaySubnet`
+  * `AzureBastionSubnet`
+* **Empty or invalid VNet objects**
+* **Nonexistent resources** (e.g. a deleted VNet still being referenced in some cache)
+
+It’s harmless but noisy.
 
 ---
 
-## ① Build the `SUBSCRIPTIONS=( … )` array
+### ✅ Fix: Add a check to skip these system subnets and blank outputs
+
+Modify the subnet listing part of the command like this:
 
 ```bash
-az account list --query "[].id" -o tsv |
-while read SUB; do
-  printf '  "%s"\n' "$SUB"
+az network vnet subnet list -g "$RG" --vnet-name "$VNET" --query "[].name" -o tsv |
+grep -v -E '^(GatewaySubnet|AzureBastionSubnet|RouteServerSubnet|AzureFirewallSubnet|None)?$' |
+while read SUBNET; do
+  echo "$SUB|$RG|$VNET|$SUBNET|$LOC"
 done
 ```
 
-**What you get**
+This does three things:
 
-```
-  "00000000-aaaa-bbbb-cccc-111111111111"
-  "22222222-dddd-eeee-ffff-333333333333"
-```
-
-Copy those quoted IDs between the parentheses of `SUBSCRIPTIONS=( … )`.
+| Change                        | Why                                          |
+| ----------------------------- | -------------------------------------------- |
+| `grep -v -E '…'`              | Filters out system-reserved subnets          |
+| `None` or empty lines         | Skips broken/missing subnet values           |
+| Quoting `$SUBNET` in the echo | Prevents bad formatting if names have spaces |
 
 ---
 
-## ② Build the `TARGETS=( … )` lines
+### ✅ Alternative Full Script (Clean Output)
 
-(one line **per subnet**)
+Here’s a full working, clean version you can run now:
 
 ```bash
 az account list --query "[].id" -o tsv |
 while read SUB; do
   az account set --subscription "$SUB"
 
-  # loop through every VNet in this subscription
   az network vnet list --query "[].[name,resourceGroup,location]" -o tsv |
   while IFS=$'\t' read -r VNET RG LOC; do
-
-    # loop through every subnet in that VNet
-    az network vnet subnet list -g "$RG" --vnet-name "$VNET" \
-        --query "[].name" -o tsv |
-    while read SUBNET; do
-      # emit the TARGET line
+    az network vnet subnet list -g "$RG" --vnet-name "$VNET" --query "[].name" -o tsv |
+    grep -v -E '^(GatewaySubnet|AzureBastionSubnet|RouteServerSubnet|AzureFirewallSubnet)?$' |
+    while read -r SUBNET; do
+      [[ -z "$SUBNET" ]] && continue
       echo "$SUB|$RG|$VNET|$SUBNET|$LOC"
     done
   done
 done
 ```
 
-**Sample output**
-
-```
-00000000-aaaa-bbbb-cccc-111111111111|rg-net-prod|vnet-prod-east|sub-web      |eastus
-00000000-aaaa-bbbb-cccc-111111111111|rg-net-prod|vnet-prod-east|sub-flowlogs |eastus
-22222222-dddd-eeee-ffff-333333333333|rg-net-dev |vnet-dev-east |sub-dev      |eastus
-```
-
-* Keep only the lines you actually want flow logs on.
-* Paste them into your script like:
-
-  ```bash
-  TARGETS=(
-    "00000000-aaaa-bbbb-cccc-111111111111|rg-net-prod|vnet-prod-east|sub-flowlogs|eastus"
-    "22222222-dddd-eeee-ffff-333333333333|rg-net-dev |vnet-dev-east |sub-dev     |eastus"
-  )
-  ```
+You’ll now only get **real, usable subnets** — no system-reserved ones, no noise.
 
 ---
 
-### Filtering tips
-
-* **Specific subnet name**
-  Append `| grep sub-flowlogs` after the final `echo …` loop.
-* **Only certain regions**
-  Insert `if [[ $LOC != "eastus" ]]; then continue; fi` inside the VNet loop.
-
-That’s all you need—no external utilities, works in Bash on macOS, Linux, and Cloud Shell. Let me know if you’d like more filtering examples!
+Let me know if you want to filter only subnets with `flow` in the name, or ones in specific regions.

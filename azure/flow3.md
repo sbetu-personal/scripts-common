@@ -1,41 +1,34 @@
-Ah, I see the issue. Let me provide a corrected version that properly handles all subscriptions and formats the output exactly as your script requires. Here's the complete solution:
-
-### Correct Command to Generate Configuration
+Here's the simplified command to get all VNets across all subscriptions in the exact format your script needs (without subnets):
 
 ```bash
 #!/bin/bash
 
-# First get all subscription IDs
+# 1. Get all subscription IDs
 echo "SUBSCRIPTIONS=("
 az account list --query "[].id" -o tsv | while read -r SUBID; do
   echo "  \"$SUBID\""
 done
 echo ")"
 
-# Now get all VNets and their subnets across all subscriptions
+# 2. Get all VNets (without subnets)
 echo "TARGETS=("
 az account list --query "[].id" -o tsv | while read -r SUBID; do
-  # Set the active subscription
   az account set --subscription "$SUBID" > /dev/null
-  
-  # Get all VNets and their details
-  az network vnet list --query "[?subnets].{rg:resourceGroup, name:name, location:location, subnets:subnets[].name}" -o json | \
-  jq -r ".[] | \"\(.rg)|\(.name)|\(.location)|\(.subnets[])\"" | \
-  while IFS="|" read -r RG VNET LOCATION SUBNET; do
-    echo "  \"$SUBID|$RG|$VNET|$SUBNET|$LOCATION\""
-  done
+  az network vnet list --query "[].{sub:id, rg:resourceGroup, name:name, location:location}" -o json | \
+    jq -r ".[] | \"\(.sub|split(\"/\")[2])|\(.rg)|\(.name)|ANY_SUBNET|\(.location)\"" | \
+    while IFS="|" read -r SUB RG VNET SUBNET LOC; do
+      echo "  \"$SUB|$RG|$VNET|ANY_SUBNET|$LOC\""
+    done
 done
 echo ")"
 ```
 
-### How to Use This:
+### Key Changes:
+1. **Simplified Output**: Only includes VNet-level information
+2. **Placeholder for Subnet**: Uses "ANY_SUBNET" as placeholder (you can replace this with your preferred default subnet name)
+3. **Proper Format**: Maintains the exact `subscription|resourceGroup|vnetName|subnet|region` format your script expects
 
-1. Run this command after doing `az login`
-2. Copy the entire output (both SUBSCRIPTIONS and TARGETS sections)
-3. Paste it directly into your script to replace the existing arrays
-
-### Example Output Format:
-
+### Example Output:
 ```bash
 SUBSCRIPTIONS=(
   "00000000-aaaa-bbbb-cccc-111111111111"
@@ -43,44 +36,23 @@ SUBSCRIPTIONS=(
 )
 
 TARGETS=(
-  "00000000-aaaa-bbbb-cccc-111111111111|rg-prod-net|vnet-prod-east|sub-flowlogs|eastus"
-  "00000000-aaaa-bbbb-cccc-111111111111|rg-prod-net|vnet-prod-east|sub-app|eastus"
-  "22222222-dddd-eeee-ffff-333333333333|rg-dev-net|vnet-dev-east|sub-flowlogs|eastus"
+  "00000000-aaaa-bbbb-cccc-111111111111|rg-prod-net|vnet-prod-east|ANY_SUBNET|eastus"
+  "00000000-aaaa-bbbb-cccc-111111111111|rg-prod-net|vnet-prod-west|ANY_SUBNET|westus"
+  "22222222-dddd-eeee-ffff-333333333333|rg-dev-net|vnet-dev-east|ANY_SUBNET|eastus"
 )
 ```
 
-### Key Improvements:
-
-1. **Proper Subscription Handling**:
-   - Processes each subscription one by one
-   - Correctly includes the subscription ID in each TARGET line
-
-2. **Complete Location Information**:
-   - Now properly includes the region/location at the end of each TARGET line
-
-3. **Better Formatting**:
-   - Maintains the exact format your script requires
-   - Proper indentation for array elements
-
-4. **JQ for Reliable Parsing**:
-   - Uses jq to properly handle JSON output from az commands
-   - More reliable than string splitting for complex data
-
-### If You Don't Have jq Installed:
-
-For systems without jq, use this alternative:
-
+### Without jq Dependency:
 ```bash
 echo "TARGETS=("
 az account list --query "[].id" -o tsv | while read -r SUBID; do
   az account set --subscription "$SUBID" > /dev/null
-  az network vnet list --query "[?subnets].[resourceGroup,name,location]" -o tsv | while read -r RG VNET LOCATION; do
-    az network vnet subnet list --vnet-name "$VNET" --resource-group "$RG" --query "[].name" -o tsv | while read -r SUBNET; do
-      echo "  \"$SUBID|$RG|$VNET|$SUBNET|$LOCATION\""
+  az network vnet list --query "[].{rg:resourceGroup, name:name, location:location}" -o tsv | \
+    while read -r RG VNET LOC; do
+      echo "  \"$SUBID|$RG|$VNET|ANY_SUBNET|$LOC\""
     done
-  done
 done
 echo ")"
 ```
 
-This will give you the same output format without requiring jq.
+You can replace "ANY_SUBNET" with your preferred default subnet name (like "subnet1") if you want to use the same subnet name for all VNets.
